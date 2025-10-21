@@ -42,7 +42,7 @@ def get_today_filename() -> Path:
     return DATA_DIR / f"leads_sub6_{today}.txt"
 
 
-@app.post("/postback", methods=["GET", "POST"])
+@app.api_route("/postback", methods=["GET", "POST"])
 async def receive_postback(request: Request):
     params = dict(request.query_params)
     sub6 = params.get("sub6")
