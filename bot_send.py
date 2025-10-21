@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 import pytz
 import logging
 
-# Загрузка .env
+# --- Загрузка .env ---
 load_dotenv()
 
 # --- Настройки S3 ---
@@ -16,11 +16,11 @@ S3_BUCKET = os.getenv("S3_BUCKET")
 S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY")
 S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
 
-# --- Настройки основного бота ---
+# --- Настройки Telegram ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# --- Настройки бота для ошибок ---
+# --- Настройки error-бота ---
 ERROR_BOT_TOKEN = os.getenv("ERROR_BOT_TOKEN")
 ERROR_CHAT_ID = os.getenv("ERROR_CHAT_ID")
 
@@ -62,48 +62,46 @@ async def send_error(message: str):
     if not ERROR_BOT_TOKEN or not ERROR_CHAT_ID:
         logging.error("Ошибка: не заданы ERROR_BOT_TOKEN или ERROR_CHAT_ID")
         return
-
     async with aiohttp.ClientSession() as session:
         await session.post(
             f"https://api.telegram.org/bot{ERROR_BOT_TOKEN}/sendMessage",
             data={"chat_id": ERROR_CHAT_ID, "text": message}
         )
 
-async def daily_send():
-    """Каждый день в 9:00 по МСК отправляет файл из S3 в Telegram"""
+async def main():
+    """Отправка файла за вчерашний день"""
     tz = pytz.timezone(TIMEZONE)
+    now = datetime.datetime.now(tz)
+    yesterday = (now - datetime.timedelta(days=1)).strftime("%d.%m.%Y")
+    filename = f"leads_sub6_{yesterday}.txt"
+    local_path = f"/opt/leads_postback/{filename}"
 
-    while True:
-        now = datetime.datetime.now(tz)
-        if now.hour == 9 and now.minute == 0:
-            yesterday = (now - datetime.timedelta(days=1)).strftime("%d.%m.%Y")
-            filename = f"leads_sub6_{yesterday}.txt"
-            local_path = f"/opt/leads_postback/{filename}"
+    logging.info(f"=== START {yesterday} ===")
 
-            try:
-                # Скачиваем файл из S3
-                s3.download_file(S3_BUCKET, filename, local_path)
-                # Отправляем в Telegram
-                await send_file(local_path)
-                logging.info(f"[✅] Файл {filename} успешно отправлен в Telegram")
+    try:
+        # Скачиваем файл из S3
+        s3.download_file(S3_BUCKET, filename, local_path)
 
-                # После успешной отправки — удаляем локальный файл
-                if os.path.exists(local_path):
-                    os.remove(local_path)
-                    logging.info(f"[🧹] Локальный файл {local_path} удалён")
+        # Отправляем в Telegram
+        await send_file(local_path)
+        logging.info(f"[✅] Файл {filename} отправлен в Telegram")
 
-            except Exception as e:
-                error_message = f"Error bot_send.py: {str(e)}"
-                logging.error(error_message)
-                await send_error(error_message)
+        # Удаляем локальный файл
+        if os.path.exists(local_path):
+            os.remove(local_path)
+            logging.info(f"[🧹] Локальный файл {local_path} удалён")
 
-            await asyncio.sleep(60)  # чтобы не повторял в ту же минуту
-        await asyncio.sleep(30)
+    except Exception as e:
+        err_msg = f"Error bot_send.py: {e}"
+        logging.error(err_msg)
+        await send_error(err_msg)
+
+    logging.info(f"=== END {yesterday} ===")
 
 if __name__ == "__main__":
-    logging.info("=== bot_send.py запущен ===")
+    logging.info("Запуск bot_send.py вручную или по таймеру")
     try:
-        asyncio.run(daily_send())
+        asyncio.run(main())
     except Exception as e:
         logging.critical(f"Фатальная ошибка: {e}")
         try:
