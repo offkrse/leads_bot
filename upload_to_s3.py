@@ -38,7 +38,7 @@ today = datetime.datetime.now().strftime("%d.%m.%Y")
 filename = DATA_DIR / f"leads_sub6_{today}.txt"
 
 if filename.exists():
-    s3_key = f"leads_sub6_{today}.txt"
+    s3_key = f"leads_sub6/leads_sub6_{today}.txt"
     try:
         s3.upload_file(str(filename), S3_BUCKET, s3_key)
         logging.info(f"✅ Файл {filename} успешно загружен в S3 как {s3_key}")
