@@ -74,22 +74,23 @@ async def main():
     now = datetime.datetime.now(tz)
     yesterday = (now - datetime.timedelta(days=1)).strftime("%d.%m.%Y")
     filename = f"leads_sub6_{yesterday}.txt"
-    local_path = f"/opt/leads_postback/{filename}"
+    local_path = f"/opt/leads_postback/data/{filename}"
+
+    old_date = (now - datetime.timedelta(days=7)).strftime("%d.%m.%Y")
+    old_filename = f"leads_sub6_{old_date}.txt"
+    old_local_path = f"/opt/leads_postback/data/{old_filename}"
 
     logging.info(f"=== START {yesterday} ===")
 
     try:
-        # Скачиваем файл из S3
-        s3.download_file(S3_BUCKET, filename, local_path)
-
         # Отправляем в Telegram
         await send_file(local_path)
         logging.info(f"[✅] Файл {filename} отправлен в Telegram")
 
-        # Удаляем локальный файл
-        if os.path.exists(local_path):
-            os.remove(local_path)
-            logging.info(f"[🧹] Локальный файл {local_path} удалён")
+        # Удаляем 7 дневный локальный файл
+        if os.path.exists(old_local_path):
+            os.remove(old_local_path)
+            logging.info(f"[🧹] Старый файл {old_local_path} (7 дней) удалён")
 
     except Exception as e:
         err_msg = f"Error bot_send.py: {e}"
