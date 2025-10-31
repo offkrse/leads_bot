@@ -62,3 +62,6 @@ async def receive_postback(request: Request):
 @app.get("/")
 async def root():
     return {"status": "running"}
+
+from vk_checker.webapp.app import app as vk_checker_app
+app.mount("/dashboard", vk_checker_app)
