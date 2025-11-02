@@ -63,5 +63,14 @@ async def receive_postback(request: Request):
 async def root():
     return {"status": "running"}
 
-from vk_checker.webapp.app import app as vk_checker_app
+# === VK Checker Mini App ===
+import sys
+sys.path.append("/opt/vk_checker")  # добавляем проект в sys.path
+
+try:
+    from vk_checker.webapp.app import app as vk_checker_app
+except ModuleNotFoundError:
+    # если нет папки webapp — пробуем напрямую
+    from app import app as vk_checker_app
+
 app.mount("/dashboard", vk_checker_app)
