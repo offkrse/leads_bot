@@ -103,12 +103,11 @@ async def root():
 
 # === VK Checker Mini App ===
 import sys
-sys.path.append("/opt/vk_checker")  # добавляем проект в sys.path
+sys.path.append("/opt")  # добавляем корень, где лежит vk_checker
 
 try:
     from vk_checker.webapp.app import app as vk_checker_app
-except ModuleNotFoundError:
-    # если нет папки webapp — пробуем напрямую
-    from app import app as vk_checker_app
-
-app.mount("/dashboard", vk_checker_app)
+    app.mount("/dashboard", vk_checker_app)
+    logging.info("VK Checker подключён к /dashboard")
+except Exception as e:
+    logging.warning(f"VK Checker не найден или не загружен: {e}")
