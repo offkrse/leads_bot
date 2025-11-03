@@ -6,7 +6,6 @@ import boto3
 import logging
 from pathlib import Path
 import json
-import sys
 
 # === Логи ===
 LOG_FILE = "/opt/leads_postback/postback.log"
