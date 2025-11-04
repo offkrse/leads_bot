@@ -80,7 +80,8 @@ async def receive_postback(request: Request):
     sub1 = params.get("sub1")
     sub5 = params.get("sub5")
     sub6 = params.get("sub6")
-    sum_value = params.get("sum") or params.get("payout") or "0"
+    sum_value = params.get("sum") or "0"
+    status = str(params.get("status"))
 
     # === Обработка sub6 ===
     if sub6 and sub6.isdigit():
@@ -98,6 +99,7 @@ async def receive_postback(request: Request):
         and sub5
         and sub5.isdigit()          # sub5 — только цифры
         and sum_value not in ("0", "0.0", "0.00")  # sum не равен 0
+        and status == "1"
     ):
         save_krolik(sub1, sub5, sum_value)
 
