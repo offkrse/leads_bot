@@ -92,7 +92,13 @@ async def receive_postback(request: Request):
         logging.warning(f"Некорректный sub6 (пропущен): {sub6}")
 
     # === Обработка krolik (если слово встречается в sub1) ===
-    if sub1 and "krolik" in sub1.lower() and sub5:
+    if (
+        sub1
+        and "krolik" in sub1.lower()
+        and sub5
+        and sub5.isdigit()          # sub5 — только цифры
+        and sum_value not in ("0", "0.0", "0.00")  # sum не равен 0
+    ):
         save_krolik(sub1, sub5, sum_value)
 
     return {"status": "ok"}
