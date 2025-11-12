@@ -29,6 +29,8 @@ DATA_DIR = Path("/opt/leads_postback/data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 KROLIK_FILE = DATA_DIR / "krolik.json"
+KARAKOZ_FILE = DATA_DIR / "karakoz_karas.json"
+INSTA_FILE = DATA_DIR / "insta.json"
 
 app = FastAPI()
 
@@ -44,19 +46,18 @@ def get_today_filename() -> Path:
     today = datetime.datetime.now().strftime("%d.%m.%Y")
     return DATA_DIR / f"leads_sub6_{today}.txt"
 
-def save_krolik(sub1: str, sub5: str, sum_value: str):
-    """Сохраняет данные в krolik.json, сгруппированные по дате."""
-
+def save_daily_sum(file_path: Path, sub5: str, sum_value: str):
+    """Сохраняет данные в JSON по дням. Если sub5 повторяется — суммирует."""
     today = datetime.datetime.now().strftime("%d.%m.%Y")
 
-    # Загружаем текущие данные, если файл существует
+    # Загружаем существующие данные
     data = []
-    if KROLIK_FILE.exists():
+    if file_path.exists():
         try:
-            with open(KROLIK_FILE, "r") as f:
+            with open(file_path, "r") as f:
                 data = json.load(f)
         except json.JSONDecodeError:
-            logging.warning("Файл krolik.json повреждён, пересоздаём его.")
+            logging.warning(f"Файл {file_path.name} повреждён, пересоздаём.")
             data = []
 
     # Находим блок для сегодняшнего дня
@@ -65,14 +66,30 @@ def save_krolik(sub1: str, sub5: str, sum_value: str):
         today_block = {"day": today, "data": {}}
         data.append(today_block)
 
-    # Добавляем или обновляем запись
-    today_block["data"][sub5] = sum_value
+    # Преобразуем сумму
+    try:
+        sum_float = float(sum_value)
+    except ValueError:
+        logging.warning(f"Некорректное значение sum: {sum_value}")
+        return
+
+    # Суммируем при повторном sub5
+    if sub5 in today_block["data"]:
+        try:
+            old_sum = float(today_block["data"][sub5])
+        except ValueError:
+            old_sum = 0
+        new_sum = old_sum + sum_float
+    else:
+        new_sum = sum_float
+
+    today_block["data"][sub5] = round(new_sum, 2)
 
     # Сохраняем обратно
-    with open(KROLIK_FILE, "w") as f:
+    with open(file_path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    logging.info(f"Сохранено в krolik.json: {sub5} -> {sum_value}")
+    logging.info(f"[{file_path.name}] {sub5} -> {new_sum}")
 
 @app.api_route("/postback", methods=["GET", "POST"])
 async def receive_postback(request: Request):
@@ -95,13 +112,23 @@ async def receive_postback(request: Request):
     # === Обработка krolik (если слово встречается в sub1) ===
     if (
         sub1
-        and "krolik" in sub1.lower()
         and sub5
         and sub5.isdigit()          # sub5 — только цифры
         and sum_value not in ("0", "0.0", "0.00")  # sum не равен 0
         and status == "1"
     ):
-        save_krolik(sub1, sub5, sum_value)
+        sub1_lower = sub1.lower()
+    
+        if "krolik" in sub1_lower:
+            save_daily_sum(KROLIK_FILE, sub5, sum_value)
+        elif "karakoz" in sub1_lower or "karas" in sub1_lower:
+            save_daily_sum(KARAKOZ_FILE, sub5, sum_value)
+        elif "insta" in sub1_lower:
+            save_daily_sum(INSTA_FILE, sub5, sum_value)
+    else:
+        logging.warning(
+            f"Пропущен постбэк: sub1={sub1}, sub5={sub5}, sum={sum_value}, status={status}"
+        )
 
     return {"status": "ok"}
 
