@@ -28,6 +28,7 @@ S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
 DATA_DIR = Path("/opt/leads_postback/data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+STAT_INCOME_FILE = DATA_DIR / "stat_lt_income.json"
 KROLIK_FILE = DATA_DIR / "krolik.json"
 KARAKOZ_FILE = DATA_DIR / "karakoz_karas.json"
 INSTA_FILE = DATA_DIR / "insta.json"
@@ -92,6 +93,32 @@ def save_daily_sum(file_path: Path, sub5: str, sum_value: str):
 
     logging.info(f"[{file_path.name}] {sub5} -> {new_sum}")
 
+def save_stat_income(sub1_name: str, sub5: str, date_str: str):
+    """Сохраняет имя группы (sub1), sub5 и дату конверсии в stat_lt_income.json"""
+
+    record = {
+        "sub1": sub1_name,
+        "sub5": sub5,
+        "date": date_str or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+    data = []
+    if STAT_INCOME_FILE.exists():
+        try:
+            with open(STAT_INCOME_FILE, "r") as f:
+                data = json.load(f)
+        except json.JSONDecodeError:
+            logging.warning("Файл stat_lt_income.json повреждён, пересоздаём.")
+            data = []
+
+    data.append(record)
+
+    with open(STAT_INCOME_FILE, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    logging.info(f"[stat_lt_income.json] Добавлена запись: {record}")
+
+
 @app.api_route("/postback", methods=["GET", "POST"])
 async def receive_postback(request: Request):
     params = dict(request.query_params)
@@ -100,6 +127,8 @@ async def receive_postback(request: Request):
     sub6 = params.get("sub6")
     sum_value = params.get("sum") or "0"
     status = str(params.get("status"))
+    date_str = params.get("date") or ""
+    #date_str = params.get("date") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # === Обработка sub6 ===
     if sub6 and sub6.isdigit():
@@ -122,10 +151,13 @@ async def receive_postback(request: Request):
     
         if "krolik" in sub1_lower:
             save_daily_sum(KROLIK_FILE, sub5, sum_value)
+            save_stat_income("krolik", sub5, date_str)
         elif "karakoz" in sub1_lower or "karas" in sub1_lower:
             save_daily_sum(KARAKOZ_FILE, sub5, sum_value)
+            save_stat_income("karakoz_karas", sub5, date_str)
         elif "insta" in sub1_lower:
             save_daily_sum(INSTA_FILE, sub5, sum_value)
+            save_stat_income("insta", sub5, date_str)
         elif "utkavalutkarf" in sub1_lower:
             save_daily_sum(UTKAVALUTKA_FILE, sub5, sum_value)
     else:
