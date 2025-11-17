@@ -31,6 +31,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 KROLIK_FILE = DATA_DIR / "krolik.json"
 KARAKOZ_FILE = DATA_DIR / "karakoz_karas.json"
 INSTA_FILE = DATA_DIR / "insta.json"
+UTKAVALUTKA_FILE = DATA_DIR / "utkavalutkarf.json"
 
 app = FastAPI()
 
@@ -125,6 +126,8 @@ async def receive_postback(request: Request):
             save_daily_sum(KARAKOZ_FILE, sub5, sum_value)
         elif "insta" in sub1_lower:
             save_daily_sum(INSTA_FILE, sub5, sum_value)
+        elif "utkavalutkarf" in sub1_lower:
+            save_daily_sum(UTKAVALUTKA_FILE, sub5, sum_value)
     else:
         logging.warning(
             f"Пропущен постбэк: sub1={sub1}, sub5={sub5}, sum={sum_value}, status={status}"
