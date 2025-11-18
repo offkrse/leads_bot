@@ -93,12 +93,14 @@ def save_daily_sum(file_path: Path, sub5: str, sum_value: str):
 
     logging.info(f"[{file_path.name}] {sub5} -> {new_sum}")
 
-def save_stat_income(sub1_name: str, sub5: str, date_str: str):
-    """Сохраняет имя группы (sub1), sub5 и дату конверсии в stat_lt_income.json"""
+def save_stat_income(sub1_name: str, sub5: str, date_str: str, sum_value: str, sub6: str):
+    """Сохраняет группу (sub1), sub5, дату, сумму и sub6 в stat_lt_income.json"""
 
     record = {
         "sub1": sub1_name,
         "sub5": sub5,
+        "sum": sum_value,
+        "sub6": sub6,
         "date": date_str or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
 
@@ -151,13 +153,13 @@ async def receive_postback(request: Request):
     
         if "krolik" in sub1_lower:
             save_daily_sum(KROLIK_FILE, sub5, sum_value)
-            save_stat_income("krolik", sub5, date_str)
+            save_stat_income("krolik", sub5, date_str, sum_value, sub6)
         elif "karakoz" in sub1_lower or "karas" in sub1_lower:
             save_daily_sum(KARAKOZ_FILE, sub5, sum_value)
-            save_stat_income("karakoz_karas", sub5, date_str)
+            save_stat_income("karakoz_karas", sub5, date_str, sum_value, sub6)
         elif "insta" in sub1_lower:
             save_daily_sum(INSTA_FILE, sub5, sum_value)
-            save_stat_income("insta", sub5, date_str)
+            save_stat_income("insta", sub5, date_str, sum_value, sub6)
         elif "utkavalutkarf" in sub1_lower:
             save_daily_sum(UTKAVALUTKA_FILE, sub5, sum_value)
     else:
