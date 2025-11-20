@@ -38,6 +38,7 @@ LISICKA_FILE = DATA_DIR / "lisicka.json"
 PTICHKA_FILE = DATA_DIR / "ptichka.json"
 KUPR_FILE = DATA_DIR / "kupr.json"
 ZAYMDOZP_FILE = DATA_DIR / "zaymdozp.json"
+PCHELKA_FILE = DATA_DIR / "pchelkazaim.json"
 
 app = FastAPI()
 
@@ -183,6 +184,9 @@ async def receive_postback(request: Request):
         elif "zaymdozp" in sub1_lower:
             save_daily_sum(ZAYMDOZP_FILE, sub5, sum_value)
             save_stat_income("zaymdozp", sub5, date_str, sum_value, sub6)
+        elif "pchelkazaim" in sub1_lower:
+            save_daily_sum(PCHELKA_FILE, sub5, sum_value)
+            save_stat_income("pchelkazaim", sub5, date_str, sum_value, sub6)
     else:
         logging.warning(
             f"Пропущен постбэк: sub1={sub1}, sub5={sub5}, sum={sum_value}, status={status}"
