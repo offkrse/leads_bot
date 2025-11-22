@@ -208,3 +208,12 @@ try:
     logging.info("VK Checker подключён к /dashboard")
 except Exception as e:
     logging.warning(f"VK Checker не найден или не загружен: {e}")
+
+# === SKY ADS ===
+try:
+    from auto_ads.app import app as auto_ads_app
+    app.mount("/auto_ads", auto_ads_app)
+    logging.info("Auto ADS подключён к /auto_ads")
+except Exception as e:
+    logging.warning(f"Auto ADS не найден или ошибка загрузки: {e}")
+
