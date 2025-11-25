@@ -39,6 +39,7 @@ PTICHKA_FILE = DATA_DIR / "ptichka.json"
 KUPR_FILE = DATA_DIR / "kupr.json"
 ZAYMDOZP_FILE = DATA_DIR / "zaymdozp.json"
 PCHELKA_FILE = DATA_DIR / "pchelkazaim.json"
+NALICKINRF_FILE = DATA_DIR / "nalickinrf.json"
 
 app = FastAPI()
 
@@ -181,6 +182,9 @@ async def receive_postback(request: Request):
         elif "kupr" in sub1_lower:
             save_daily_sum(KUPR_FILE, sub5, sum_value)
             save_stat_income("kupr", sub5, date_str, sum_value, sub6)
+        elif "nalickinrf" in sub1_lower:
+            save_daily_sum(NALICKINRF_FILE, sub5, sum_value)
+            save_stat_income("nalickinrf", sub5, date_str, sum_value, sub6)
         elif "zaymdozp" in sub1_lower:
             save_daily_sum(ZAYMDOZP_FILE, sub5, sum_value)
             save_stat_income("zaymdozp", sub5, date_str, sum_value, sub6)
