@@ -216,8 +216,10 @@ except Exception as e:
 # === SKY ADS ===
 try:
     from auto_ads.app import app as auto_ads_app
-    app.mount("/auto_ads", auto_ads_app)
-    logging.info("Auto ADS подключён к /auto_ads")
+    app.mount("/auto_ads/api", auto_ads_app)
+    logging.info("Auto ADS подключён к /auto_ads/api")
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/auto_ads", StaticFiles(directory="/opt/auto_ads/frontend", html=True))
 except Exception as e:
     logging.warning(f"Auto ADS не найден или ошибка загрузки: {e}")
 
