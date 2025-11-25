@@ -164,7 +164,7 @@ async def receive_postback(request: Request):
         elif "karakoz" in sub1_lower or "karas" in sub1_lower:
             save_daily_sum(KARAKOZ_FILE, sub5, sum_value)
             save_stat_income("karakoz_karas", sub5, date_str, sum_value, sub6)
-        elif "insta" in sub1_lower:
+        elif "insta" in sub1_lower or "kud" in sub1_lower:
             save_daily_sum(INSTA_FILE, sub5, sum_value)
             save_stat_income("insta", sub5, date_str, sum_value, sub6)
         elif "utkavalutkarf" in sub1_lower:
