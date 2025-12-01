@@ -40,6 +40,7 @@ KUPR_FILE = DATA_DIR / "kupr.json"
 ZAYMDOZP_FILE = DATA_DIR / "zaymdozp.json"
 PCHELKA_FILE = DATA_DIR / "pchelkazaim.json"
 NALICKINRF_FILE = DATA_DIR / "nalickinrf.json"
+BANKNOTA_FILE = DATA_DIR / "banknota.json"
 
 app = FastAPI()
 
@@ -158,7 +159,7 @@ async def receive_postback(request: Request):
     ):
         sub1_lower = sub1.lower()
     
-        if "krolik" in sub1_lower:
+        if "krolik" in sub1_lower or "banknota" in sub1_lower:
             save_daily_sum(KROLIK_FILE, sub5, sum_value)
             save_stat_income("krolik", sub5, date_str, sum_value, sub6)
         elif "karakoz" in sub1_lower or "karas" in sub1_lower:
