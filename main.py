@@ -227,7 +227,7 @@ except Exception as e:
 
 # === VK CHECKER V4 ===
 try:
-    from vk_checker.v4.webapp.app import app as vk_checker_app
+    from vk_checker.v4.webapp.app import app as vk_checker_v4_app
     app.mount("/vk_checker_v4", vk_checker_v4_app)
     logging.info("VK Checker подключён к /vk_checker_v4")
 except Exception as e:
