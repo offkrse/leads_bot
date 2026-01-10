@@ -206,6 +206,117 @@ async def receive_postback(request: Request):
 
     return {"status": "ok"}
 
+# --- TRAFFIC_BH endpoint/helpers ---
+from typing import Optional
+
+TRAFFIC_DIR = DATA_DIR / "traffic_bh"
+TRAFFIC_DIR.mkdir(parents=True, exist_ok=True)
+
+def _get_traffic_filename() -> Path:
+    """Ежедневный файл для трафика (jsonl)."""
+    # Формат: traffic_bh_YYYY-MM-DD.jsonl
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    return TRAFFIC_DIR / f"traffic_bh_{today}.jsonl"
+
+def append_traffic_record(banner_id: str, user_id: str, extra: Optional[dict] = None) -> None:
+    """Добавляет одну запись в jsonl файл с временной меткой."""
+    if extra is None:
+        extra = {}
+
+    # Временная метка с часовым поясом сервера (ISO 8601)
+    ts = datetime.datetime.now().astimezone().isoformat()
+
+    record = {
+        "timestamp": ts,
+        "banner_id": banner_id,
+        "user_id": user_id,
+    }
+    # добавляем дополнительные поля, если передали
+    record.update(extra)
+
+    file_path = _get_traffic_filename()
+    try:
+        # Открываем в append и пишем одну строку JSON
+        with open(file_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                # fsync может не поддерживаться в некоторых FS — не критично
+                pass
+        logging.info(f"[traffic_bh] saved: {record}")
+    except Exception as e:
+        logging.exception(f"Ошибка записи в {file_path}: {e}")
+        raise
+
+@app.post("/traffic_bh")
+async def receive_traffic_bh(request: Request):
+    """
+    Ожидает POST с banner_id и user_id.
+    Поддерживается: JSON body, form-data/x-www-form-urlencoded и query params (на случай простого GET-теста).
+    """
+    # Попробуем несколько источников параметров (JSON -> form -> query)
+    banner_id = None
+    user_id = None
+    extra = {}
+
+    # 1) JSON body
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            banner_id = body.get("banner_id") or body.get("bannerId")
+            user_id = body.get("user_id") or body.get("userId")
+            # любые дополнительные поля положим в extra
+            for k, v in body.items():
+                if k not in ("banner_id", "bannerId", "user_id", "userId"):
+                    extra[k] = v
+    except Exception:
+        # не JSON — пропускаем
+        pass
+
+    # 2) если не в JSON — пробуем form data / x-www-form-urlencoded
+    if not banner_id or not user_id:
+        try:
+            form = await request.form()
+            if not banner_id:
+                banner_id = form.get("banner_id") or form.get("bannerId")
+            if not user_id:
+                user_id = form.get("user_id") or form.get("userId")
+            for k in form.keys():
+                if k not in ("banner_id", "bannerId", "user_id", "userId"):
+                    extra[k] = form.get(k)
+        except Exception:
+            pass
+
+    # 3) query params (fallback)
+    params = dict(request.query_params)
+    if not banner_id:
+        banner_id = params.get("banner_id") or params.get("bannerId")
+    if not user_id:
+        user_id = params.get("user_id") or params.get("userId")
+    # добавим query params в extra (необязательно)
+    for k, v in params.items():
+        if k not in ("banner_id", "bannerId", "user_id", "userId"):
+            extra.setdefault(k, v)
+
+    # Валидация
+    if not banner_id or not user_id:
+        logging.warning(f"Пропущен traffic_bh постбэк: banner_id={banner_id}, user_id={user_id}")
+        return {"status": "error", "message": "banner_id and user_id are required"}, 400
+
+    # Сохраняем
+    try:
+        append_traffic_record(str(banner_id), str(user_id), extra if extra else None)
+    except Exception as e:
+        # логируем ошибку и возвращаем 500
+        logging.exception(f"Не удалось сохранить traffic_bh запись: {e}")
+        return {"status": "error", "message": "failed to save record"}, 500
+
+    return {"status": "ok"}
+# --- /TRAFFIC_BH end ---
+
+
 @app.get("/")
 async def root():
     return {"status": "running"}
