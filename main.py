@@ -43,6 +43,7 @@ NALICKINRF_FILE = DATA_DIR / "nalickinrf.json"
 BANKNOTA_FILE = DATA_DIR / "banknota.json"
 ONERUSS_FILE = DATA_DIR / "1russ.json"
 VYDAVAYKA_FILE = DATA_DIR / "vydavayka.json"
+ZARPLATKINRF_FILE = DATA_DIR / "zarplatkinrf.json"
 
 app = FastAPI()
 
@@ -163,42 +164,32 @@ async def receive_postback(request: Request):
     
         if "krolik" in sub1_lower or "banknota" in sub1_lower:
             save_daily_sum(KROLIK_FILE, sub5, sum_value)
-            save_stat_income("krolik", sub5, date_str, sum_value, sub6)
         elif "karakoz" in sub1_lower or "karas" in sub1_lower:
             save_daily_sum(KARAKOZ_FILE, sub5, sum_value)
         elif "1russ" in sub1_lower or "darya" in sub1_lower or "vadimtop" in sub1_lower:
             save_daily_sum(ONERUSS_FILE, sub5, sum_value)
-            save_stat_income("1russ", sub5, date_str, sum_value, sub6)
         elif "vydavayka" in sub1_lower:
             save_daily_sum(VYDAVAYKA_FILE, sub5, sum_value)
-            save_stat_income("vydavayka", sub5, date_str, sum_value, sub6)
         elif "insta" in sub1_lower or "kud" in sub1_lower:
             save_daily_sum(INSTA_FILE, sub5, sum_value)
-            save_stat_income("insta", sub5, date_str, sum_value, sub6)
         elif "utkavalutkarf" in sub1_lower:
             save_daily_sum(UTKAVALUTKA_FILE, sub5, sum_value)
-            save_stat_income("utkavalutkarf", sub5, date_str, sum_value, sub6)
         elif "monzi" in sub1_lower:
             save_daily_sum(MONZI_FILE, sub5, sum_value)
-            save_stat_income("monzi", sub5, date_str, sum_value, sub6)
         elif "lisicka" in sub1_lower:
             save_daily_sum(LISICKA_FILE, sub5, sum_value)
-            save_stat_income("lisicka", sub5, date_str, sum_value, sub6)
         elif "ptichka" in sub1_lower:
             save_daily_sum(PTICHKA_FILE, sub5, sum_value)
-            save_stat_income("ptichka", sub5, date_str, sum_value, sub6)
         elif "kupr" in sub1_lower:
             save_daily_sum(KUPR_FILE, sub5, sum_value)
-            save_stat_income("kupr", sub5, date_str, sum_value, sub6)
         elif "nalickinrf" in sub1_lower:
             save_daily_sum(NALICKINRF_FILE, sub5, sum_value)
-            save_stat_income("nalickinrf", sub5, date_str, sum_value, sub6)
+        elif "zarplatkinrf" in sub1_lower:
+            save_daily_sum(ZARPLATKINRF_FILE, sub5, sum_value)
         elif "zaymdozp" in sub1_lower:
             save_daily_sum(ZAYMDOZP_FILE, sub5, sum_value)
-            save_stat_income("zaymdozp", sub5, date_str, sum_value, sub6)
         elif "pchelkazaim" in sub1_lower:
             save_daily_sum(PCHELKA_FILE, sub5, sum_value)
-            save_stat_income("pchelkazaim", sub5, date_str, sum_value, sub6)
     else:
         logging.warning(
             f"Пропущен постбэк: sub1={sub1}, sub5={sub5}, sum={sum_value}, status={status}"
