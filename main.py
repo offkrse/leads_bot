@@ -166,7 +166,7 @@ async def receive_postback(request: Request):
             save_daily_sum(KROLIK_FILE, sub5, sum_value)
         elif "karakoz" in sub1_lower or "karas" in sub1_lower:
             save_daily_sum(KARAKOZ_FILE, sub5, sum_value)
-        elif "1russ" in sub1_lower or "darya" in sub1_lower or "vadimtop" in sub1_lower:
+        elif "1russ" in sub1_lower or "darya" in sub1_lower or "vadimtop" in sub1_lower or "clickchirik" in sub1_lower:
             save_daily_sum(ONERUSS_FILE, sub5, sum_value)
         elif "vydavayka" in sub1_lower:
             save_daily_sum(VYDAVAYKA_FILE, sub5, sum_value)
