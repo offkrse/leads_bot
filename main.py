@@ -511,54 +511,38 @@ async def receive_ab_test(request: Request):
     - branch: Номер ветки пользователя (int)
     - is_new_user: Новый ли пользователь (bool)
     """
-    # Извлекаем параметры из разных источников
-    banner_id = None
-    user_id = None
-    step = None
-    account_name = None
-    count = None
-
-    # 1) JSON body
-    try:
-        body = await request.json()
-        if isinstance(body, dict):
-            banner_id = body.get("banner_id") or body.get("bannerId")
-            user_id = body.get("user_id") or body.get("userId")
-            step = body.get("step")
-            account_name = body.get("account_name") or body.get("accountName")
-            count = body.get("count")
-    except Exception:
-        pass
-
-    # 2) Form data
-    if not all([banner_id, user_id, step is not None, account_name]):
+    # Собираем все параметры в один словарь
+    all_params = {}
+    
+    # 1) Query params (всегда доступны)
+    all_params.update(dict(request.query_params))
+    
+    # 2) Определяем тип контента и читаем body
+    content_type = request.headers.get("content-type", "")
+    
+    if "application/json" in content_type:
+        # JSON body
         try:
-            form = await request.form()
-            if not banner_id:
-                banner_id = form.get("banner_id") or form.get("bannerId")
-            if not user_id:
-                user_id = form.get("user_id") or form.get("userId")
-            if step is None:
-                step = form.get("step")
-            if not account_name:
-                account_name = form.get("account_name") or form.get("accountName")
-            if count is None:
-                count = form.get("count")
+            body = await request.json()
+            if isinstance(body, dict):
+                all_params.update(body)
         except Exception:
             pass
-
-    # 3) Query params
-    params = dict(request.query_params)
-    if not banner_id:
-        banner_id = params.get("banner_id") or params.get("bannerId")
-    if not user_id:
-        user_id = params.get("user_id") or params.get("userId")
-    if step is None:
-        step = params.get("step")
-    if not account_name:
-        account_name = params.get("account_name") or params.get("accountName")
-    if count is None:
-        count = params.get("count")
+    else:
+        # Form data (application/x-www-form-urlencoded или multipart/form-data)
+        try:
+            form = await request.form()
+            for key in form.keys():
+                all_params[key] = form.get(key)
+        except Exception:
+            pass
+    
+    # Извлекаем нужные параметры
+    banner_id = all_params.get("banner_id") or all_params.get("bannerId")
+    user_id = all_params.get("user_id") or all_params.get("userId")
+    step = all_params.get("step")
+    account_name = all_params.get("account_name") or all_params.get("accountName")
+    count = all_params.get("count")
 
     # Преобразование типов
     try:
