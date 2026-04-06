@@ -6,6 +6,8 @@ import boto3
 import logging
 from pathlib import Path
 import json
+from typing import Optional
+import threading
 
 # === Логи ===
 LOG_FILE = "/opt/leads_postback/postback.log"
@@ -198,7 +200,6 @@ async def receive_postback(request: Request):
     return {"status": "ok"}
 
 # --- TRAFFIC_BH endpoint/helpers ---
-from typing import Optional
 
 TRAFFIC_DIR = DATA_DIR / "traffic_bh"
 TRAFFIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -308,6 +309,346 @@ async def receive_traffic_bh(request: Request):
 # --- /TRAFFIC_BH end ---
 
 
+# === A/B TEST для чат-ботов ===
+AB_TEST_DIR = DATA_DIR / "ab_test"
+AB_TEST_DIR.mkdir(parents=True, exist_ok=True)
+
+# Счётчики для round-robin распределения веток (потокобезопасные)
+# Ключ: "account_name:count" — отдельный счётчик для каждой комбинации
+_branch_counters: dict[str, int] = {}
+_branch_lock = threading.Lock()
+
+
+def _get_ab_test_file(account_name: str) -> Path:
+    """Возвращает путь к файлу для конкретного аккаунта."""
+    # Очищаем имя от потенциально опасных символов
+    safe_name = "".join(c for c in account_name if c.isalnum() or c in ("_", "-"))
+    if not safe_name:
+        safe_name = "default"
+    return AB_TEST_DIR / f"{safe_name}.json"
+
+
+def _get_next_branch(account_name: str, count: int) -> int:
+    """
+    Возвращает следующую ветку для round-robin распределения.
+    Потокобезопасно.
+    
+    Счётчик хранится отдельно для каждой комбинации account_name + count,
+    чтобы при смене count распределение начиналось заново с ветки 1.
+    """
+    # Ключ включает count, чтобы при смене количества веток счёт начинался заново
+    counter_key = f"{account_name}:{count}"
+    
+    with _branch_lock:
+        current = _branch_counters.get(counter_key, 0)
+        next_branch = (current % count) + 1  # Ветки от 1 до count
+        _branch_counters[counter_key] = current + 1
+        return next_branch
+
+
+def _load_ab_data(file_path: Path) -> dict:
+    """
+    Загружает данные A/B теста.
+    Структура:
+    {
+        "users": {
+            "<user_id>": {
+                "banner_id": "...",
+                "branch": 1,
+                "steps": [
+                    {"step": 0, "timestamp": "...", "time_from_prev": null},
+                    {"step": 1, "timestamp": "...", "time_from_prev": 45.2},
+                    {"step": 2.1, "timestamp": "...", "time_from_prev": 30.5}
+                ],
+                "first_seen": "...",
+                "last_seen": "..."
+            }
+        },
+        "stats": {
+            "total_users": 100,
+            "by_branch": {1: 50, 2: 50},
+            "by_step": {"0": 100, "1": 80, "2.1": 30, "2.2": 25}
+        }
+    }
+    """
+    if file_path.exists():
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            logging.warning(f"Файл {file_path} повреждён, пересоздаём.")
+    return {"users": {}, "stats": {"total_users": 0, "by_branch": {}, "by_step": {}}}
+
+
+def _save_ab_data(file_path: Path, data: dict) -> None:
+    """Сохраняет данные A/B теста."""
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def _update_stats(data: dict) -> None:
+    """Пересчитывает статистику на основе данных пользователей."""
+    users = data.get("users", {})
+    
+    total_users = len(users)
+    by_branch: dict[int, int] = {}
+    by_step: dict[str, int] = {}
+    
+    for user_data in users.values():
+        branch = user_data.get("branch")
+        if branch:
+            by_branch[branch] = by_branch.get(branch, 0) + 1
+        
+        for step_record in user_data.get("steps", []):
+            step_key = str(step_record["step"])
+            by_step[step_key] = by_step.get(step_key, 0) + 1
+    
+    data["stats"] = {
+        "total_users": total_users,
+        "by_branch": by_branch,
+        "by_step": by_step
+    }
+
+
+def process_ab_test_event(
+    banner_id: str,
+    user_id: str,
+    step: float,
+    account_name: str,
+    count: Optional[int] = None
+) -> dict:
+    """
+    Обрабатывает событие A/B теста.
+    
+    Возвращает:
+    - branch: номер ветки (присваивается ТОЛЬКО при первом step=0, потом не меняется)
+    - is_new_user: True если это новый пользователь
+    """
+    file_path = _get_ab_test_file(account_name)
+    data = _load_ab_data(file_path)
+    
+    now = datetime.datetime.now().astimezone()
+    now_iso = now.isoformat()
+    
+    is_new_user = user_id not in data["users"]
+    
+    if is_new_user:
+        # Новый пользователь — присваиваем ветку только здесь
+        if step == 0 and count and count > 0:
+            branch = _get_next_branch(account_name, count)
+        else:
+            branch = 1  # По умолчанию ветка 1
+        
+        data["users"][user_id] = {
+            "banner_id": banner_id,
+            "branch": branch,
+            "steps": [
+                {"step": step, "timestamp": now_iso, "time_from_prev": None}
+            ],
+            "first_seen": now_iso,
+            "last_seen": now_iso
+        }
+    else:
+        # Существующий пользователь — ВСЕГДА сохраняем его изначальную ветку
+        user_data = data["users"][user_id]
+        branch = user_data.get("branch", 1)  # Ветка НЕ меняется, даже если пришёл step=0 с другим count
+        
+        # Вычисляем время от предыдущего шага
+        time_from_prev = None
+        if user_data["steps"]:
+            last_step = user_data["steps"][-1]
+            try:
+                last_time = datetime.datetime.fromisoformat(last_step["timestamp"])
+                time_from_prev = round((now - last_time).total_seconds(), 2)
+            except Exception:
+                pass
+        
+        # Добавляем новый шаг (включая повторный step=0 если вдруг пришёл)
+        user_data["steps"].append({
+            "step": step,
+            "timestamp": now_iso,
+            "time_from_prev": time_from_prev
+        })
+        user_data["last_seen"] = now_iso
+        
+        # Обновляем banner_id если изменился (не должно, но на всякий)
+        if banner_id and banner_id != user_data.get("banner_id"):
+            user_data["banner_id"] = banner_id
+    
+    # Пересчитываем статистику
+    _update_stats(data)
+    
+    # Сохраняем
+    _save_ab_data(file_path, data)
+    
+    logging.info(
+        f"[ab_test/{account_name}] user={user_id}, banner={banner_id}, "
+        f"step={step}, branch={branch}, new={is_new_user}"
+    )
+    
+    return {"branch": branch, "is_new_user": is_new_user}
+
+
+@app.post("/traffic_bh/ab_test")
+async def receive_ab_test(request: Request):
+    """
+    A/B тест для чат-ботов.
+    
+    Параметры:
+    - banner_id (str): ID баннера/источника
+    - user_id (str): ID пользователя
+    - step (float): Номер шага (0 = вход, 1, 2.1, 2.2 и т.д.)
+    - account_name (str): Название файла для записи
+    - count (int, опционально): Количество веток (только для step=0)
+    
+    Возвращает:
+    - status: "ok"
+    - branch: Номер ветки пользователя (int)
+    - is_new_user: Новый ли пользователь (bool)
+    """
+    # Извлекаем параметры из разных источников
+    banner_id = None
+    user_id = None
+    step = None
+    account_name = None
+    count = None
+
+    # 1) JSON body
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            banner_id = body.get("banner_id") or body.get("bannerId")
+            user_id = body.get("user_id") or body.get("userId")
+            step = body.get("step")
+            account_name = body.get("account_name") or body.get("accountName")
+            count = body.get("count")
+    except Exception:
+        pass
+
+    # 2) Form data
+    if not all([banner_id, user_id, step is not None, account_name]):
+        try:
+            form = await request.form()
+            if not banner_id:
+                banner_id = form.get("banner_id") or form.get("bannerId")
+            if not user_id:
+                user_id = form.get("user_id") or form.get("userId")
+            if step is None:
+                step = form.get("step")
+            if not account_name:
+                account_name = form.get("account_name") or form.get("accountName")
+            if count is None:
+                count = form.get("count")
+        except Exception:
+            pass
+
+    # 3) Query params
+    params = dict(request.query_params)
+    if not banner_id:
+        banner_id = params.get("banner_id") or params.get("bannerId")
+    if not user_id:
+        user_id = params.get("user_id") or params.get("userId")
+    if step is None:
+        step = params.get("step")
+    if not account_name:
+        account_name = params.get("account_name") or params.get("accountName")
+    if count is None:
+        count = params.get("count")
+
+    # Преобразование типов
+    try:
+        step = float(step) if step is not None else None
+    except (ValueError, TypeError):
+        return {"status": "error", "message": "step must be a number"}, 400
+
+    try:
+        count = int(count) if count is not None else None
+    except (ValueError, TypeError):
+        count = None
+
+    # Валидация
+    if not banner_id or not user_id or step is None or not account_name:
+        missing = []
+        if not banner_id:
+            missing.append("banner_id")
+        if not user_id:
+            missing.append("user_id")
+        if step is None:
+            missing.append("step")
+        if not account_name:
+            missing.append("account_name")
+        
+        logging.warning(f"Пропущен ab_test постбэк, отсутствуют: {missing}")
+        return {
+            "status": "error",
+            "message": f"Missing required parameters: {', '.join(missing)}"
+        }, 400
+
+    # Обрабатываем событие
+    try:
+        result = process_ab_test_event(
+            banner_id=str(banner_id),
+            user_id=str(user_id),
+            step=step,
+            account_name=str(account_name),
+            count=count
+        )
+    except Exception as e:
+        logging.exception(f"Ошибка обработки ab_test: {e}")
+        return {"status": "error", "message": "failed to process event"}, 500
+
+    return {
+        "status": "ok",
+        "branch": result["branch"],
+        "is_new_user": result["is_new_user"]
+    }
+
+
+@app.get("/traffic_bh/ab_test/stats/{account_name}")
+async def get_ab_test_stats(account_name: str):
+    """
+    Получить статистику A/B теста для аккаунта.
+    """
+    file_path = _get_ab_test_file(account_name)
+    
+    if not file_path.exists():
+        return {"status": "error", "message": "account not found"}, 404
+    
+    data = _load_ab_data(file_path)
+    
+    return {
+        "status": "ok",
+        "account": account_name,
+        "stats": data.get("stats", {}),
+        "users_count": len(data.get("users", {}))
+    }
+
+
+@app.get("/traffic_bh/ab_test/user/{account_name}/{user_id}")
+async def get_ab_test_user(account_name: str, user_id: str):
+    """
+    Получить данные конкретного пользователя.
+    """
+    file_path = _get_ab_test_file(account_name)
+    
+    if not file_path.exists():
+        return {"status": "error", "message": "account not found"}, 404
+    
+    data = _load_ab_data(file_path)
+    user_data = data.get("users", {}).get(user_id)
+    
+    if not user_data:
+        return {"status": "error", "message": "user not found"}, 404
+    
+    return {
+        "status": "ok",
+        "user_id": user_id,
+        "data": user_data
+    }
+
+# === /A/B TEST end ===
+
+
 @app.get("/")
 async def root():
     return {"status": "running"}
@@ -338,4 +679,3 @@ try:
     logging.info("VK Checker подключён к /vk_checker_v4")
 except Exception as e:
     logging.warning(f"VK Checker_v4 не найден или не загружен: {e}")
-
