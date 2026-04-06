@@ -346,6 +346,11 @@ def _get_next_branch(account_name: str, count: int) -> int:
         return next_branch
 
 
+# Часовой пояс UTC+4
+from datetime import timezone
+UTC_PLUS_4 = timezone(datetime.timedelta(hours=4))
+
+
 def _load_ab_data(file_path: Path) -> dict:
     """
     Загружает данные A/B теста.
@@ -427,7 +432,7 @@ def process_ab_test_event(
     file_path = _get_ab_test_file(account_name)
     data = _load_ab_data(file_path)
     
-    now = datetime.datetime.now().astimezone()
+    now = datetime.datetime.now(UTC_PLUS_4)
     now_iso = now.isoformat()
     
     is_new_user = user_id not in data["users"]
