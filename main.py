@@ -9,6 +9,8 @@ import json
 from typing import Optional
 import threading
 
+VERSION="1.0"
+
 # === Логи ===
 LOG_FILE = "/opt/leads_postback/postback.log"
 logging.basicConfig(
@@ -520,22 +522,37 @@ async def receive_ab_test(request: Request):
     # 2) Определяем тип контента и читаем body
     content_type = request.headers.get("content-type", "")
     
+    # DEBUG: логируем что пришло
+    logging.info(f"[ab_test DEBUG] content-type: {content_type}")
+    logging.info(f"[ab_test DEBUG] query_params: {dict(request.query_params)}")
+    
+    # Читаем raw body для отладки
+    try:
+        raw_body = await request.body()
+        logging.info(f"[ab_test DEBUG] raw body: {raw_body[:500] if raw_body else 'empty'}")
+    except Exception as e:
+        logging.info(f"[ab_test DEBUG] failed to read body: {e}")
+        raw_body = b""
+    
     if "application/json" in content_type:
         # JSON body
         try:
-            body = await request.json()
+            body = json.loads(raw_body)
             if isinstance(body, dict):
                 all_params.update(body)
-        except Exception:
-            pass
-    else:
-        # Form data (application/x-www-form-urlencoded или multipart/form-data)
+            logging.info(f"[ab_test DEBUG] parsed JSON: {body}")
+        except Exception as e:
+            logging.info(f"[ab_test DEBUG] JSON parse error: {e}")
+    elif raw_body:
+        # Form data (application/x-www-form-urlencoded)
         try:
-            form = await request.form()
-            for key in form.keys():
-                all_params[key] = form.get(key)
-        except Exception:
-            pass
+            from urllib.parse import parse_qs
+            parsed = parse_qs(raw_body.decode("utf-8"))
+            for key, values in parsed.items():
+                all_params[key] = values[0] if values else None
+            logging.info(f"[ab_test DEBUG] parsed form: {all_params}")
+        except Exception as e:
+            logging.info(f"[ab_test DEBUG] form parse error: {e}")
     
     # Извлекаем нужные параметры
     banner_id = all_params.get("banner_id") or all_params.get("bannerId")
@@ -543,6 +560,8 @@ async def receive_ab_test(request: Request):
     step = all_params.get("step")
     account_name = all_params.get("account_name") or all_params.get("accountName")
     count = all_params.get("count")
+    
+    logging.info(f"[ab_test DEBUG] extracted: banner_id={banner_id}, user_id={user_id}, step={step}, account_name={account_name}, count={count}")
 
     # Преобразование типов
     try:
