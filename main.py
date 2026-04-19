@@ -9,7 +9,7 @@ import json
 from typing import Optional
 import threading
 
-VERSION="1.1"
+VERSION="1.2"
 
 # === Логи ===
 LOG_FILE = "/opt/leads_postback/postback.log"
@@ -32,7 +32,17 @@ S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
 DATA_DIR = Path("/opt/leads_postback/data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-STAT_INCOME_FILE = DATA_DIR / "stat_lt_income.json"
+STAT_INCOME_DIR = DATA_DIR / "stat_lt_income"
+STAT_INCOME_DIR.mkdir(parents=True, exist_ok=True)
+
+def get_stat_income_file() -> Path:
+    """Возвращает путь к файлу stat_lt_income с еженедельной ротацией.
+    Неделя считается по ISO (понедельник = начало недели).
+    Формат имени: stat_lt_income_YYYY_W<номер_недели>.json
+    """
+    now = datetime.datetime.now()
+    year, week, _ = now.isocalendar()
+    return STAT_INCOME_DIR / f"stat_lt_income_{year}_W{week:02d}.json"
 KROLIK_FILE = DATA_DIR / "krolik.json"
 KARAKOZ_FILE = DATA_DIR / "karakoz_karas.json"
 INSTA_FILE = DATA_DIR / "insta.json"
@@ -108,44 +118,61 @@ def save_daily_sum(file_path: Path, sub5: str, sum_value: str):
 
     logging.info(f"[{file_path.name}] {sub5} -> {new_sum}")
 
-def save_stat_income(sub1_name: str, sub5: str, date_str: str, sum_value: str, sub6: str):
-    """Сохраняет группу (sub1), sub5, дату, сумму и sub6 в stat_lt_income.json"""
+def save_stat_income(sub1_name: str, sub5: str, date_str: str, sum_value: str, sub6: str, sub2: str = "", status: str = ""):
+    """Сохраняет все постбэки в stat_lt_income (еженедельный файл в отдельной директории).
+    Поля: sub1, sub2, sub5, sub6, sum, status, date.
+    """
+    stat_file = get_stat_income_file()
 
     record = {
         "sub1": sub1_name,
+        "sub2": sub2,
         "sub5": sub5,
-        "sum": sum_value,
         "sub6": sub6,
+        "sum": sum_value,
+        "status": status,
         "date": date_str or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
 
     data = []
-    if STAT_INCOME_FILE.exists():
+    if stat_file.exists():
         try:
-            with open(STAT_INCOME_FILE, "r") as f:
+            with open(stat_file, "r") as f:
                 data = json.load(f)
         except json.JSONDecodeError:
-            logging.warning("Файл stat_lt_income.json повреждён, пересоздаём.")
+            logging.warning(f"Файл {stat_file.name} повреждён, пересоздаём.")
             data = []
 
     data.append(record)
 
-    with open(STAT_INCOME_FILE, "w") as f:
+    with open(stat_file, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    logging.info(f"[stat_lt_income.json] Добавлена запись: {record}")
+    logging.info(f"[{stat_file.name}] Добавлена запись: {record}")
 
 
 @app.api_route("/postback", methods=["GET", "POST"])
 async def receive_postback(request: Request):
     params = dict(request.query_params)
     sub1 = params.get("sub1")
+    sub2 = params.get("sub2") or ""
     sub5 = params.get("sub5")
     sub6 = params.get("sub6")
     sum_value = params.get("sum") or "0"
     status = str(params.get("status"))
     date_str = params.get("date") or ""
     #date_str = params.get("date") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # === Сохраняем ВСЕ постбэки в stat_lt_income (еженедельная ротация) ===
+    save_stat_income(
+        sub1_name=sub1 or "",
+        sub5=sub5 or "",
+        date_str=date_str,
+        sum_value=sum_value,
+        sub6=sub6 or "",
+        sub2=sub2,
+        status=status,
+    )
 
     # === Обработка sub6 ===
     if sub6 and sub6.isdigit():
