@@ -9,7 +9,7 @@ import json
 from typing import Optional
 import threading
 
-VERSION="1.2"
+VERSION="1.21"
 
 # === Логи ===
 LOG_FILE = "/opt/leads_postback/postback.log"
@@ -58,6 +58,7 @@ BANKNOTA_FILE = DATA_DIR / "banknota.json"
 ONERUSS_FILE = DATA_DIR / "1russ.json"
 VYDAVAYKA_FILE = DATA_DIR / "vydavayka.json"
 ZARPLATKINRF_FILE = DATA_DIR / "zarplatkinrf.json"
+OREL_FILE = DATA_DIR / "orel.json"
 
 app = FastAPI()
 
@@ -221,6 +222,8 @@ async def receive_postback(request: Request):
             save_daily_sum(ZAYMDOZP_FILE, sub5, sum_value)
         elif "pchelkazaim" in sub1_lower:
             save_daily_sum(PCHELKA_FILE, sub5, sum_value)
+        elif "orel" in sub1_lower:
+            save_daily_sum(OREL_FILE, sub5, sum_value)
     else:
         logging.warning(
             f"Пропущен постбэк: sub1={sub1}, sub5={sub5}, sum={sum_value}, status={status}"
