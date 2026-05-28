@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Header, HTTPException
 from dotenv import load_dotenv
 import os
 import datetime
@@ -10,10 +10,11 @@ from typing import Optional
 import threading
 import httpx
 
-VERSION="1.23"
+VERSION="1.23.1"
 
 # === VK Ads офлайн конверсии ===
-VK_TRACKER_URL  = "https://top-fwz1.mail.ru/tracker"
+VK_TRACKER_URL = "https://top-fwz1.mail.ru/tracker"
+VK_API_KEY     = os.getenv("VK_API_KEY", "")  # задать в .env: VK_API_KEY=секретный_ключ
 
 # === Логи ===
 LOG_FILE = "/opt/leads_postback/postback.log"
@@ -180,22 +181,13 @@ def send_mondiad_postback(sub3: str, status: str) -> None:
 
 
 # === VK ADS ОФЛАЙН КОНВЕРСИИ ===
-#
-# vk_pixels.json — маппинг sub1 → пиксель:
-# {
-#   "krolik": { "pixel_id": "3769728", "goal": "lead",     "enabled": true,  "comment": "Кролик МФО" },
-#   "karakoz": { "pixel_id": "1234567", "goal": "purchase", "enabled": true,  "comment": "Каракоз" },
-#   "insta":   { "pixel_id": "9999999", "goal": "lead",     "enabled": false, "comment": "Выключен" }
-# }
-#
-# Поля:
-#   pixel_id  — ID пикселя из кабинета VK Ads (обязательно)
-#   goal      — название JS-события из кабинета VK Ads (обязательно)
-#   enabled   — true/false, можно быстро отключить без удаления (обязательно)
-#   comment   — произвольный комментарий (необязательно)
-#
-# sub1 проверяется через "in" — например "krolik" сработает для "krolik_main" и "new_krolik"
 
+def _check_api_key(x_api_key: str) -> None:
+    """Проверяет X-API-Key заголовок. Бросает 401 если ключ неверный."""
+    if not VK_API_KEY:
+        raise HTTPException(status_code=500, detail="VK_API_KEY не задан в .env")
+    if x_api_key != VK_API_KEY:
+        raise HTTPException(status_code=401, detail="Неверный API ключ")
 
 def _load_vk_pixels() -> dict:
     if VK_PIXELS_FILE.exists():
@@ -210,10 +202,9 @@ def _save_vk_pixels(data: dict) -> None:
     with open(VK_PIXELS_FILE, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-def _find_vk_config(sub1: str) -> tuple[str, dict] | None:
+def _find_vk_config(sub1: str) -> tuple | None:
     """
-    Ищет первый подходящий конфиг по sub1.
-    Проверка через 'in': ключ 'krolik' найдёт sub1='krolik_main'.
+    Ищет первый подходящий конфиг по sub1 (проверка через 'in').
     Возвращает (ключ, конфиг) или None.
     """
     if not sub1:
@@ -243,19 +234,20 @@ def send_vk_conversion_userid(vk_user_id: str, pixel_id: str, goal: str) -> bool
         return False
 
 
-# --- CRUD эндпоинты для управления конфигом ---
-
 @app.get("/vk_pixels")
-async def vk_pixels_list():
+async def vk_pixels_list(x_api_key: str = Header(...)):
     """Получить весь список маппингов sub1 → пиксель."""
+    _check_api_key(x_api_key)
     return {"status": "ok", "data": _load_vk_pixels()}
 
+
 @app.post("/vk_pixels")
-async def vk_pixels_add(request: Request):
+async def vk_pixels_add(request: Request, x_api_key: str = Header(...)):
     """
     Добавить или обновить маппинг.
-    Body JSON: { "sub1": "krolik", "pixel_id": "3769728", "goal": "lead", "enabled": true, "comment": "..." }
+    Body: { "sub1": "krolik", "pixel_id": "3769728", "goal": "lead", "enabled": true, "comment": "..." }
     """
+    _check_api_key(x_api_key)
     try:
         body = await request.json()
     except Exception:
@@ -276,12 +268,14 @@ async def vk_pixels_add(request: Request):
     logging.info(f"[vk_pixels] Добавлен/обновлён: {sub1} → pixel={pixel_id} goal={goal}")
     return {"status": "ok", "sub1": sub1, "data": data[sub1]}
 
+
 @app.patch("/vk_pixels/{sub1}")
-async def vk_pixels_update(sub1: str, request: Request):
+async def vk_pixels_update(sub1: str, request: Request, x_api_key: str = Header(...)):
     """
     Частичное обновление — например только enabled.
-    Body JSON: { "enabled": false }  или  { "goal": "purchase" }
+    Body: { "enabled": false }  или  { "goal": "purchase" }
     """
+    _check_api_key(x_api_key)
     data = _load_vk_pixels()
     if sub1 not in data:
         return {"status": "error", "message": f"sub1='{sub1}' не найден"}
@@ -299,9 +293,11 @@ async def vk_pixels_update(sub1: str, request: Request):
     logging.info(f"[vk_pixels] Обновлён: {sub1} → {data[sub1]}")
     return {"status": "ok", "sub1": sub1, "data": data[sub1]}
 
+
 @app.delete("/vk_pixels/{sub1}")
-async def vk_pixels_delete(sub1: str):
+async def vk_pixels_delete(sub1: str, x_api_key: str = Header(...)):
     """Удалить маппинг по sub1."""
+    _check_api_key(x_api_key)
     data = _load_vk_pixels()
     if sub1 not in data:
         return {"status": "error", "message": f"sub1='{sub1}' не найден"}
