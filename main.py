@@ -10,7 +10,10 @@ from typing import Optional
 import threading
 import httpx
 
-VERSION="1.22"
+VERSION="1.23"
+
+# === VK Ads офлайн конверсии ===
+VK_TRACKER_URL  = "https://top-fwz1.mail.ru/tracker"
 
 # === Логи ===
 LOG_FILE = "/opt/leads_postback/postback.log"
@@ -32,6 +35,8 @@ S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
 
 DATA_DIR = Path("/opt/leads_postback/data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+VK_PIXELS_FILE = DATA_DIR / "vk_pixels.json"
 
 STAT_INCOME_DIR = DATA_DIR / "stat_lt_income"
 STAT_INCOME_DIR.mkdir(parents=True, exist_ok=True)
@@ -174,6 +179,140 @@ def send_mondiad_postback(sub3: str, status: str) -> None:
         logging.error(f"[mondiad] Ошибка отправки постбэка sub3={sub3}: {e}")
 
 
+# === VK ADS ОФЛАЙН КОНВЕРСИИ ===
+#
+# vk_pixels.json — маппинг sub1 → пиксель:
+# {
+#   "krolik": { "pixel_id": "3769728", "goal": "lead",     "enabled": true,  "comment": "Кролик МФО" },
+#   "karakoz": { "pixel_id": "1234567", "goal": "purchase", "enabled": true,  "comment": "Каракоз" },
+#   "insta":   { "pixel_id": "9999999", "goal": "lead",     "enabled": false, "comment": "Выключен" }
+# }
+#
+# Поля:
+#   pixel_id  — ID пикселя из кабинета VK Ads (обязательно)
+#   goal      — название JS-события из кабинета VK Ads (обязательно)
+#   enabled   — true/false, можно быстро отключить без удаления (обязательно)
+#   comment   — произвольный комментарий (необязательно)
+#
+# sub1 проверяется через "in" — например "krolik" сработает для "krolik_main" и "new_krolik"
+
+
+def _load_vk_pixels() -> dict:
+    if VK_PIXELS_FILE.exists():
+        try:
+            with open(VK_PIXELS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            logging.warning("[vk_pixels] Файл повреждён, возвращаем пустой конфиг")
+    return {}
+
+def _save_vk_pixels(data: dict) -> None:
+    with open(VK_PIXELS_FILE, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+def _find_vk_config(sub1: str) -> tuple[str, dict] | None:
+    """
+    Ищет первый подходящий конфиг по sub1.
+    Проверка через 'in': ключ 'krolik' найдёт sub1='krolik_main'.
+    Возвращает (ключ, конфиг) или None.
+    """
+    if not sub1:
+        return None
+    configs = _load_vk_pixels()
+    sub1_lower = sub1.lower()
+    for key, cfg in configs.items():
+        if key.lower() in sub1_lower and cfg.get("enabled", True):
+            return key, cfg
+    return None
+
+def send_vk_conversion_userid(vk_user_id: str, pixel_id: str, goal: str) -> bool:
+    """Отправляет офлайн-конверсию в VK Ads по userid."""
+    if not pixel_id or not vk_user_id:
+        return False
+    url = f"{VK_TRACKER_URL}?id={pixel_id};e=RG%3A0/{goal};userid={vk_user_id}"
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(url)
+            ok = resp.status_code < 400
+            (logging.info if ok else logging.error)(
+                f"[vk_offline] pixel={pixel_id} goal={goal} userid={vk_user_id} → HTTP {resp.status_code}"
+            )
+            return ok
+    except Exception as e:
+        logging.error(f"[vk_offline] Ошибка: pixel={pixel_id} userid={vk_user_id}: {e}")
+        return False
+
+
+# --- CRUD эндпоинты для управления конфигом ---
+
+@app.get("/vk_pixels")
+async def vk_pixels_list():
+    """Получить весь список маппингов sub1 → пиксель."""
+    return {"status": "ok", "data": _load_vk_pixels()}
+
+@app.post("/vk_pixels")
+async def vk_pixels_add(request: Request):
+    """
+    Добавить или обновить маппинг.
+    Body JSON: { "sub1": "krolik", "pixel_id": "3769728", "goal": "lead", "enabled": true, "comment": "..." }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"status": "error", "message": "invalid JSON"}
+
+    sub1     = (body.get("sub1") or "").strip().lower()
+    pixel_id = (body.get("pixel_id") or "").strip()
+    goal     = (body.get("goal") or "").strip()
+    enabled  = body.get("enabled", True)
+    comment  = body.get("comment", "")
+
+    if not sub1 or not pixel_id or not goal:
+        return {"status": "error", "message": "sub1, pixel_id и goal обязательны"}
+
+    data = _load_vk_pixels()
+    data[sub1] = {"pixel_id": pixel_id, "goal": goal, "enabled": enabled, "comment": comment}
+    _save_vk_pixels(data)
+    logging.info(f"[vk_pixels] Добавлен/обновлён: {sub1} → pixel={pixel_id} goal={goal}")
+    return {"status": "ok", "sub1": sub1, "data": data[sub1]}
+
+@app.patch("/vk_pixels/{sub1}")
+async def vk_pixels_update(sub1: str, request: Request):
+    """
+    Частичное обновление — например только enabled.
+    Body JSON: { "enabled": false }  или  { "goal": "purchase" }
+    """
+    data = _load_vk_pixels()
+    if sub1 not in data:
+        return {"status": "error", "message": f"sub1='{sub1}' не найден"}
+
+    try:
+        body = await request.json()
+    except Exception:
+        return {"status": "error", "message": "invalid JSON"}
+
+    for field in ("pixel_id", "goal", "enabled", "comment"):
+        if field in body:
+            data[sub1][field] = body[field]
+
+    _save_vk_pixels(data)
+    logging.info(f"[vk_pixels] Обновлён: {sub1} → {data[sub1]}")
+    return {"status": "ok", "sub1": sub1, "data": data[sub1]}
+
+@app.delete("/vk_pixels/{sub1}")
+async def vk_pixels_delete(sub1: str):
+    """Удалить маппинг по sub1."""
+    data = _load_vk_pixels()
+    if sub1 not in data:
+        return {"status": "error", "message": f"sub1='{sub1}' не найден"}
+    del data[sub1]
+    _save_vk_pixels(data)
+    logging.info(f"[vk_pixels] Удалён: {sub1}")
+    return {"status": "ok", "deleted": sub1}
+
+# === /VK ADS ОФЛАЙН КОНВЕРСИИ end ===
+
+
 @app.api_route("/postback", methods=["GET", "POST"])
 async def receive_postback(request: Request):
     params = dict(request.query_params)
@@ -254,6 +393,21 @@ async def receive_postback(request: Request):
             save_daily_sum(PCHELKA_FILE, sub5, sum_value)
         elif "orel" in sub1_lower:
             save_daily_sum(OREL_FILE, sub5, sum_value)
+
+        # === VK Ads офлайн конверсия ===
+        if sub6 and sub6.isdigit():
+            match = _find_vk_config(sub1 or "")
+            if match:
+                key, cfg = match
+                send_vk_conversion_userid(
+                    vk_user_id=sub6,
+                    pixel_id=cfg["pixel_id"],
+                    goal=cfg["goal"]
+                )
+            else:
+                logging.info(f"[vk_offline] Конфиг для sub1={sub1} не найден — пропуск")
+        else:
+            logging.warning(f"[vk_offline] sub6 не является user ID, пропуск: sub6={sub6}")
     else:
         logging.warning(
             f"Пропущен постбэк: sub1={sub1}, sub5={sub5}, sum={sum_value}, status={status}"
