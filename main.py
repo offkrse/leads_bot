@@ -8,8 +8,9 @@ from pathlib import Path
 import json
 from typing import Optional
 import threading
+import httpx
 
-VERSION="1.21"
+VERSION="1.22"
 
 # === Логи ===
 LOG_FILE = "/opt/leads_postback/postback.log"
@@ -152,17 +153,46 @@ def save_stat_income(sub1_name: str, sub5: str, date_str: str, sum_value: str, s
     logging.info(f"[{stat_file.name}] Добавлена запись: {record}")
 
 
+def send_mondiad_postback(sub3: str, status: str) -> None:
+    """Отправляет POST-запросы на постбэк Mondiad.
+    goal=617 — всегда (при наличии sub3 и sub2=mondiad).
+    goal=618 — дополнительно, если status=1.
+    """
+    base_url = "https://postback.pbmnd.com/track"
+    params_617 = {"uid": "29552", "clickid": sub3, "goal": "617"}
+    params_618 = {"uid": "29552", "clickid": sub3, "goal": "618"}
+
+    try:
+        with httpx.Client(timeout=10) as client:
+            r617 = client.post(base_url, params=params_617)
+            logging.info(f"[mondiad] goal=617 sub3={sub3} → {r617.status_code}")
+
+            if status == "1":
+                r618 = client.post(base_url, params=params_618)
+                logging.info(f"[mondiad] goal=618 sub3={sub3} → {r618.status_code}")
+    except Exception as e:
+        logging.error(f"[mondiad] Ошибка отправки постбэка sub3={sub3}: {e}")
+
+
 @app.api_route("/postback", methods=["GET", "POST"])
 async def receive_postback(request: Request):
     params = dict(request.query_params)
     sub1 = params.get("sub1")
     sub2 = params.get("sub2") or ""
+    sub3 = params.get("sub3") or ""
     sub5 = params.get("sub5")
     sub6 = params.get("sub6")
     sum_value = params.get("sum") or "0"
     status = str(params.get("status"))
     date_str = params.get("date") or ""
     #date_str = params.get("date") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # === Mondiad постбэк: insta в sub1 + sub2=mondiad ===
+    if sub1 and "insta" in sub1.lower() and sub2.lower() == "mondiad":
+        if sub3:
+            send_mondiad_postback(sub3=sub3, status=status)
+        else:
+            logging.warning(f"[mondiad] sub3 пустой, постбэк не отправлен (sub1={sub1})")
 
     # === Сохраняем ВСЕ постбэки в stat_lt_income (еженедельная ротация) ===
     save_stat_income(
