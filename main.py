@@ -10,7 +10,7 @@ from typing import Optional
 import threading
 import httpx
 
-VERSION="1.23.2"
+VERSION="1.23.3"
 
 # === VK Ads офлайн конверсии ===
 VK_TRACKER_URL = "https://top-fwz1.mail.ru/tracker"
@@ -26,6 +26,15 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
+# Отдельный лог для VK офлайн конверсий
+VK_LOG_FILE = "/opt/leads_postback/vk_offline.log"
+vk_logger = logging.getLogger("vk_offline")
+vk_logger.setLevel(logging.INFO)
+vk_logger.propagate = False
+vk_handler = logging.FileHandler(VK_LOG_FILE)
+vk_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+vk_logger.addHandler(vk_handler)
 
 # === Настройки ===
 load_dotenv()
@@ -194,7 +203,7 @@ def _load_vk_pixels() -> dict:
             with open(VK_PIXELS_FILE, "r") as f:
                 return json.load(f)
         except Exception:
-            logging.warning("[vk_pixels] Файл повреждён, возвращаем пустой конфиг")
+            vk_logger.warning("Файл vk_pixels.json повреждён, возвращаем пустой конфиг")
     return {}
 
 def _save_vk_pixels(data: dict) -> None:
@@ -211,7 +220,7 @@ def _find_vk_config(sub1: str) -> tuple | None:
             return key, cfg
     return None
 
-def send_vk_conversion_userid(vk_user_id: str, pixel_id: str, goal: str) -> bool:
+def send_vk_conversion_userid(vk_user_id: str, pixel_id: str, goal: str, sub1: str = "") -> bool:
     if not pixel_id or not vk_user_id:
         return False
     url = f"{VK_TRACKER_URL}?id={pixel_id};e=RG%3A0/{goal};userid={vk_user_id}"
@@ -219,12 +228,21 @@ def send_vk_conversion_userid(vk_user_id: str, pixel_id: str, goal: str) -> bool
         with httpx.Client(timeout=10) as client:
             resp = client.get(url)
             ok = resp.status_code < 400
-            (logging.info if ok else logging.error)(
-                f"[vk_offline] pixel={pixel_id} goal={goal} userid={vk_user_id} → HTTP {resp.status_code}"
-            )
+            if ok:
+                vk_logger.info(
+                    f"OK | sub1={sub1} pixel={pixel_id} goal={goal} userid={vk_user_id} "
+                    f"http={resp.status_code}"
+                )
+            else:
+                vk_logger.error(
+                    f"FAIL | sub1={sub1} pixel={pixel_id} goal={goal} userid={vk_user_id} "
+                    f"http={resp.status_code}"
+                )
             return ok
     except Exception as e:
-        logging.error(f"[vk_offline] Ошибка: pixel={pixel_id} userid={vk_user_id}: {e}")
+        vk_logger.error(
+            f"ERROR | sub1={sub1} pixel={pixel_id} goal={goal} userid={vk_user_id} err={e}"
+        )
         return False
 
 
@@ -250,7 +268,7 @@ async def vk_pixels_add(request: Request, x_api_key: str = Header(...)):
     data = _load_vk_pixels()
     data[sub1] = {"pixel_id": pixel_id, "goal": goal, "enabled": enabled, "comment": comment}
     _save_vk_pixels(data)
-    logging.info(f"[vk_pixels] Добавлен/обновлён: {sub1} → pixel={pixel_id} goal={goal}")
+    vk_logger.info(f"CONFIG ADD | sub1={sub1} pixel={pixel_id} goal={goal}")
     return {"status": "ok", "sub1": sub1, "data": data[sub1]}
 
 @app.patch("/vk_pixels/{sub1}")
@@ -267,7 +285,7 @@ async def vk_pixels_update(sub1: str, request: Request, x_api_key: str = Header(
         if field in body:
             data[sub1][field] = body[field]
     _save_vk_pixels(data)
-    logging.info(f"[vk_pixels] Обновлён: {sub1} → {data[sub1]}")
+    vk_logger.info(f"CONFIG UPDATE | sub1={sub1} → {data[sub1]}")
     return {"status": "ok", "sub1": sub1, "data": data[sub1]}
 
 @app.delete("/vk_pixels/{sub1}")
@@ -278,7 +296,7 @@ async def vk_pixels_delete(sub1: str, x_api_key: str = Header(...)):
         return {"status": "error", "message": f"sub1='{sub1}' не найден"}
     del data[sub1]
     _save_vk_pixels(data)
-    logging.info(f"[vk_pixels] Удалён: {sub1}")
+    vk_logger.info(f"CONFIG DELETE | sub1={sub1}")
     return {"status": "ok", "deleted": sub1}
 
 # === /VK ADS ОФЛАЙН КОНВЕРСИИ end ===
@@ -323,10 +341,11 @@ async def receive_postback(request: Request):
             send_vk_conversion_userid(
                 vk_user_id=sub6,
                 pixel_id=cfg["pixel_id"],
-                goal=cfg["goal"]
+                goal=cfg["goal"],
+                sub1=sub1
             )
         else:
-            logging.info(f"[vk_offline] Конфиг для sub1={sub1} не найден — пропуск")
+            vk_logger.info(f"SKIP | sub1={sub1} не найден в конфиге")
 
     # === Обработка sub6 ===
     if sub6 and sub6.isdigit():
@@ -382,6 +401,62 @@ async def receive_postback(request: Request):
             f"Пропущен постбэк: sub1={sub1}, sub5={sub5}, sum={sum_value}, status={status}"
         )
 
+    return {"status": "ok"}
+
+
+@app.post("/vk_pixel_log")
+async def receive_vk_pixel_log(request: Request):
+    """
+    GTM отправляет сюда результат срабатывания пикселя VK.
+    Body: { "uid": "123456789", "status": "ok"|"error", "pixel_id": "3769722" }
+
+    GTM тег (Пользовательский HTML, триггер — Просмотр страницы):
+
+        <script type="text/javascript">
+        var _tmr = window._tmr || (window._tmr = []);
+        var uid = new URLSearchParams(window.location.search).get('utm_term') || '';
+        _tmr.push({id: "3769722", type: "pageView", start: (new Date()).getTime(), pid: uid});
+        (function (d, w, id) {
+          if (d.getElementById(id)) return;
+          var ts = d.createElement("script"); ts.type = "text/javascript"; ts.async = true; ts.id = id;
+          ts.src = "https://top-fwz1.mail.ru/js/code.js";
+          var f = function () {var s = d.getElementsByTagName("script")[0]; s.parentNode.insertBefore(ts, s);};
+          if (w.opera == "[object Opera]") { d.addEventListener("DOMContentLoaded", f, false); } else { f(); }
+        })(document, window, "tmr-code");
+
+        // Логируем на сервер факт срабатывания пикселя + uid
+        var pixelStatus = "ok";
+        try {
+          var img = new Image();
+          img.onerror = function() { pixelStatus = "error"; };
+          img.src = "https://top-fwz1.mail.ru/counter?id=3769722;js=na";
+        } catch(e) { pixelStatus = "error"; }
+
+        fetch("https://own-zone.ru/vk_pixel_log", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            uid: uid,
+            pixel_id: "3769722",
+            status: pixelStatus,
+            url: window.location.href
+          })
+        });
+        </script>
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"status": "error", "message": "invalid JSON"}
+
+    uid      = (body.get("uid") or "").strip()
+    pixel_id = (body.get("pixel_id") or "").strip()
+    status   = (body.get("status") or "unknown").strip()
+    url      = (body.get("url") or "").strip()
+
+    vk_logger.info(
+        f"PIXEL_FIRE | uid={uid} pixel={pixel_id} status={status} url={url}"
+    )
     return {"status": "ok"}
 
 # --- TRAFFIC_BH endpoint/helpers ---
