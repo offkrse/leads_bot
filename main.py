@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
 import datetime
@@ -10,11 +11,7 @@ from typing import Optional
 import threading
 import httpx
 
-VERSION="1.23.3"
-
-# === VK Ads офлайн конверсии ===
-VK_TRACKER_URL = "https://top-fwz1.mail.ru/tracker"
-VK_API_KEY     = os.getenv("VK_API_KEY", "")
+VERSION="1.23.4"
 
 # === Логи ===
 LOG_FILE = "/opt/leads_postback/postback.log"
@@ -35,6 +32,10 @@ vk_logger.propagate = False
 vk_handler = logging.FileHandler(VK_LOG_FILE)
 vk_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 vk_logger.addHandler(vk_handler)
+
+# === VK Ads офлайн конверсии ===
+VK_TRACKER_URL = "https://top-fwz1.mail.ru/tracker"
+VK_API_KEY     = os.getenv("VK_API_KEY", "")
 
 # === Настройки ===
 load_dotenv()
@@ -77,6 +78,13 @@ ZARPLATKINRF_FILE = DATA_DIR / "zarplatkinrf.json"
 OREL_FILE = DATA_DIR / "orel.json"
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["POST"],
+    allow_headers=["Content-Type"],
+)
 
 # === S3 ===
 s3 = boto3.client(
@@ -344,8 +352,6 @@ async def receive_postback(request: Request):
                 goal=cfg["goal"],
                 sub1=sub1
             )
-        else:
-            vk_logger.info(f"SKIP | sub1={sub1} не найден в конфиге")
 
     # === Обработка sub6 ===
     if sub6 and sub6.isdigit():
@@ -406,44 +412,7 @@ async def receive_postback(request: Request):
 
 @app.post("/vk_pixel_log")
 async def receive_vk_pixel_log(request: Request):
-    """
-    GTM отправляет сюда результат срабатывания пикселя VK.
-    Body: { "uid": "123456789", "status": "ok"|"error", "pixel_id": "3769722" }
-
-    GTM тег (Пользовательский HTML, триггер — Просмотр страницы):
-
-        <script type="text/javascript">
-        var _tmr = window._tmr || (window._tmr = []);
-        var uid = new URLSearchParams(window.location.search).get('utm_term') || '';
-        _tmr.push({id: "3769722", type: "pageView", start: (new Date()).getTime(), pid: uid});
-        (function (d, w, id) {
-          if (d.getElementById(id)) return;
-          var ts = d.createElement("script"); ts.type = "text/javascript"; ts.async = true; ts.id = id;
-          ts.src = "https://top-fwz1.mail.ru/js/code.js";
-          var f = function () {var s = d.getElementsByTagName("script")[0]; s.parentNode.insertBefore(ts, s);};
-          if (w.opera == "[object Opera]") { d.addEventListener("DOMContentLoaded", f, false); } else { f(); }
-        })(document, window, "tmr-code");
-
-        // Логируем на сервер факт срабатывания пикселя + uid
-        var pixelStatus = "ok";
-        try {
-          var img = new Image();
-          img.onerror = function() { pixelStatus = "error"; };
-          img.src = "https://top-fwz1.mail.ru/counter?id=3769722;js=na";
-        } catch(e) { pixelStatus = "error"; }
-
-        fetch("https://own-zone.ru/vk_pixel_log", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            uid: uid,
-            pixel_id: "3769722",
-            status: pixelStatus,
-            url: window.location.href
-          })
-        });
-        </script>
-    """
+    """GTM отправляет сюда факт срабатывания пикселя VK + uid пользователя."""
     try:
         body = await request.json()
     except Exception:
