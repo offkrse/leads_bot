@@ -10,8 +10,9 @@ import json
 from typing import Optional
 import threading
 import httpx
+import re
 
-VERSION="1.23.4"
+VERSION="1.23.5"
 
 # === Логи ===
 LOG_FILE = "/opt/leads_postback/postback.log"
@@ -47,7 +48,8 @@ S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
 DATA_DIR = Path("/opt/leads_postback/data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-VK_PIXELS_FILE = DATA_DIR / "vk_pixels.json"
+VK_PIXELS_FILE  = DATA_DIR / "vk_pixels.json"
+VK_CLIENTS_FILE = DATA_DIR / "vk_clients.json"  # маппинг ym_uid → pixel_id
 
 STAT_INCOME_DIR = DATA_DIR / "stat_lt_income"
 STAT_INCOME_DIR.mkdir(parents=True, exist_ok=True)
@@ -211,7 +213,7 @@ def _load_vk_pixels() -> dict:
             with open(VK_PIXELS_FILE, "r") as f:
                 return json.load(f)
         except Exception:
-            vk_logger.warning("Файл vk_pixels.json повреждён, возвращаем пустой конфиг")
+            vk_logger.warning("Файл vk_pixels.json повреждён")
     return {}
 
 def _save_vk_pixels(data: dict) -> None:
@@ -227,6 +229,40 @@ def _find_vk_config(sub1: str) -> tuple | None:
         if key.lower() in sub1_lower and cfg.get("enabled", True):
             return key, cfg
     return None
+
+def _load_vk_clients() -> dict:
+    if VK_CLIENTS_FILE.exists():
+        try:
+            with open(VK_CLIENTS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            vk_logger.warning("Файл vk_clients.json повреждён")
+    return {}
+
+def _save_vk_clients(data: dict) -> None:
+    with open(VK_CLIENTS_FILE, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+def store_vk_client(ym_uid: str, pixel_id: str) -> None:
+    """Сохраняет пару ym_uid → pixel_id при визите пользователя."""
+    data = _load_vk_clients()
+    data[ym_uid] = {
+        "pixel_id": pixel_id,
+        "ts": datetime.datetime.now().isoformat()
+    }
+    _save_vk_clients(data)
+    vk_logger.info(f"PIXEL_FIRE | ym_uid={ym_uid} pixel={pixel_id}")
+
+def parse_client_id_from_sub8(sub8: str) -> str:
+    """
+    Парсит ClientID из sub8.
+    Пример sub8: "we_website:1118;ClientID:1780231294483774380;split:off;"
+    Возвращает значение ClientID или пустую строку.
+    """
+    if not sub8:
+        return ""
+    match = re.search(r'ClientID:(\d+)', sub8)
+    return match.group(1) if match else ""
 
 def send_vk_conversion_userid(vk_user_id: str, pixel_id: str, goal: str, sub1: str = "") -> bool:
     if not pixel_id or not vk_user_id:
@@ -248,9 +284,7 @@ def send_vk_conversion_userid(vk_user_id: str, pixel_id: str, goal: str, sub1: s
                 )
             return ok
     except Exception as e:
-        vk_logger.error(
-            f"ERROR | sub1={sub1} pixel={pixel_id} goal={goal} userid={vk_user_id} err={e}"
-        )
+        vk_logger.error(f"ERROR | sub1={sub1} pixel={pixel_id} userid={vk_user_id} err={e}")
         return False
 
 
@@ -307,6 +341,31 @@ async def vk_pixels_delete(sub1: str, x_api_key: str = Header(...)):
     vk_logger.info(f"CONFIG DELETE | sub1={sub1}")
     return {"status": "ok", "deleted": sub1}
 
+
+@app.post("/vk_pixel_log")
+async def receive_vk_pixel_log(request: Request):
+    """
+    GTM отправляет сюда ym_uid при каждом визите.
+    Body: { "uid": "1780231294483774380", "pixel_id": "3769722", "status": "ok", "url": "..." }
+    Сохраняет маппинг ym_uid → pixel_id для последующего матча с ClientID из sub8.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"status": "error", "message": "invalid JSON"}
+
+    uid      = (body.get("uid") or "").strip()
+    pixel_id = (body.get("pixel_id") or "").strip()
+    status   = (body.get("status") or "unknown").strip()
+    url      = (body.get("url") or "").strip()
+
+    if uid and pixel_id:
+        store_vk_client(ym_uid=uid, pixel_id=pixel_id)
+    else:
+        vk_logger.warning(f"PIXEL_FIRE пропущен: uid={uid!r} pixel={pixel_id!r}")
+
+    return {"status": "ok"}
+
 # === /VK ADS ОФЛАЙН КОНВЕРСИИ end ===
 
 
@@ -318,6 +377,7 @@ async def receive_postback(request: Request):
     sub3 = params.get("sub3") or ""
     sub5 = params.get("sub5")
     sub6 = params.get("sub6")
+    sub8 = params.get("sub8") or ""
     sum_value = params.get("sum") or "0"
     status = str(params.get("status"))
     date_str = params.get("date") or ""
@@ -341,17 +401,25 @@ async def receive_postback(request: Request):
         status=status,
     )
 
-    # === VK Ads офлайн конверсия (любой status) ===
-    if sub1 and sub6 and sub6.isdigit():
-        match = _find_vk_config(sub1)
-        if match:
-            key, cfg = match
-            send_vk_conversion_userid(
-                vk_user_id=sub6,
-                pixel_id=cfg["pixel_id"],
-                goal=cfg["goal"],
-                sub1=sub1
-            )
+    # === VK Ads офлайн конверсия через ClientID из sub8 ===
+    if sub1 and sub8:
+        client_id = parse_client_id_from_sub8(sub8)
+        if client_id:
+            match = _find_vk_config(sub1)
+            if match:
+                key, cfg = match
+                # Ищем pixel_id который был сохранён при визите этого пользователя
+                clients = _load_vk_clients()
+                client_entry = clients.get(client_id)
+                if client_entry:
+                    send_vk_conversion_userid(
+                        vk_user_id=client_id,
+                        pixel_id=cfg["pixel_id"],
+                        goal=cfg["goal"],
+                        sub1=sub1
+                    )
+                else:
+                    vk_logger.info(f"SKIP | ClientID={client_id} не найден в vk_clients.json")
 
     # === Обработка sub6 ===
     if sub6 and sub6.isdigit():
@@ -407,25 +475,6 @@ async def receive_postback(request: Request):
             f"Пропущен постбэк: sub1={sub1}, sub5={sub5}, sum={sum_value}, status={status}"
         )
 
-    return {"status": "ok"}
-
-
-@app.post("/vk_pixel_log")
-async def receive_vk_pixel_log(request: Request):
-    """GTM отправляет сюда факт срабатывания пикселя VK + uid пользователя."""
-    try:
-        body = await request.json()
-    except Exception:
-        return {"status": "error", "message": "invalid JSON"}
-
-    uid      = (body.get("uid") or "").strip()
-    pixel_id = (body.get("pixel_id") or "").strip()
-    status   = (body.get("status") or "unknown").strip()
-    url      = (body.get("url") or "").strip()
-
-    vk_logger.info(
-        f"PIXEL_FIRE | uid={uid} pixel={pixel_id} status={status} url={url}"
-    )
     return {"status": "ok"}
 
 # --- TRAFFIC_BH endpoint/helpers ---
